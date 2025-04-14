@@ -13,6 +13,10 @@ The application calculates and displays:
 
 It also provides absolute changes in these metrics for the selected time frame.
 
+* Screenshot
+
+[[file:screenshot.png]]
+
 * CSV Data Specification (Hevy Export)
 
 The application expects a CSV file with the following characteristics, matching the format typically exported by Hevy for body measurements:
