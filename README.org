@@ -13,6 +13,8 @@ The application calculates and displays:
 
 It also provides absolute changes in these metrics for the selected time frame.
 
+You can use the hosted version here: https://200ok.ch/hevy_measurements_visualizer/
+
 * Screenshot
 
 [[file:screenshot.png]]
