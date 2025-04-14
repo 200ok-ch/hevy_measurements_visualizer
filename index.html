@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Body Measurement Visualizer</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+            background-color: #f4f4f4;
+            color: #333;
+            max-width: 1200px;
+            margin: auto;
+        }
+        .container {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        h1, h2 {
+            text-align: center;
+            color: #555;
+        }
+        .controls {
+            display: flex;
+            flex-wrap: wrap; /* Allow wrapping on smaller screens */
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #e9e9e9;
+            border-radius: 5px;
+        }
+        .control-group {
+            margin-bottom: 10px; /* Add spacing if wrapped */
+        }
+        .controls label, .controls input {
+            margin-right: 10px;
+        }
+        .slider-container {
+            display: flex;
+            align-items: center;
+            flex-grow: 1; /* Allow slider to take more space */
+            min-width: 300px; /* Ensure slider has enough width */
+            margin-left: 20px; /* Add space from file input */
+        }
+        #timeFrameSlider {
+            flex-grow: 1;
+            margin: 0 10px;
+        }
+        #sliderValueDisplay {
+            font-weight: bold;
+            min-width: 100px; /* Prevent layout shifts */
+            text-align: right;
+        }
+        .chart-container {
+            position: relative;
+            height: 40vh; /* Responsive height */
+            width: 100%;  /* Responsive width */
+            margin-bottom: 20px;
+        }
+        .summary {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border: 1px solid #eee;
+            border-radius: 4px;
+        }
+        .summary p {
+            margin: 5px 0;
+            font-size: 0.9em;
+        }
+         .summary span {
+            font-weight: bold;
+        }
+        .positive { color: green; }
+        .negative { color: red; }
+        .no-change { color: grey; }
+
+        /* Hide elements until data is loaded */
+        #timeFrameControls, #chartsContainer {
+            display: none;
+        }
+
+    </style>
+    <!-- PapaParse for CSV Parsing -->
+    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/papaparse/5.3.2/papaparse.min.js"></script> -->
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js"></script>
+    <!-- Moment.js for Date Handling -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
+    <!-- Chart.js for Charts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
+    <!-- Chart.js Adapter for Moment.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@^1.0.0"></script>
+
+</head>
+<body>
+
+    <h1>Body Measurement Visualizer</h1>
+
+    <div class="container">
+        <div class="controls">
+            <div class="control-group">
+                <label for="csvFileInput">Upload CSV:</label>
+                <input type="file" id="csvFileInput" accept=".csv">
+            </div>
+            <div id="timeFrameControls" class="control-group slider-container">
+                 <label for="timeFrameSlider">Time Frame:</label>
+                 <input type="range" id="timeFrameSlider" min="0" max="9" step="1" value="0">
+                 <span id="sliderValueDisplay">All Time</span>
+            </div>
+        </div>
+         <div id="processingMessage" style="text-align: center; margin: 10px; color: blue;"></div>
+    </div>
+
+
+    <div id="chartsContainer">
+        <div class="container">
+            <h2>Weight (kg) & Body Fat (%)</h2>
+            <div class="chart-container">
+                <canvas id="weightFatChart"></canvas>
+            </div>
+            <div class="summary">
+                <p>Weight Change: <span id="weightChange">N/A</span></p>
+                <p>Body Fat % Change: <span id="fatPercentChange">N/A</span></p>
+            </div>
+        </div>
+
+        <div class="container">
+            <h2>Lean Mass (kg) & Fat Mass (kg)</h2>
+            <div class="chart-container">
+                <canvas id="massChart"></canvas>
+            </div>
+            <div class="summary">
+                <p>Lean Mass Change: <span id="leanMassChange">N/A</span></p>
+                <p>Fat Mass Change: <span id="fatMassChange">N/A</span></p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const csvFileInput = document.getElementById('csvFileInput');
+        const timeFrameControls = document.getElementById('timeFrameControls');
+        const timeFrameSlider = document.getElementById('timeFrameSlider');
+        const sliderValueDisplay = document.getElementById('sliderValueDisplay');
+        const weightFatCanvas = document.getElementById('weightFatChart').getContext('2d');
+        const massCanvas = document.getElementById('massChart').getContext('2d');
+        const chartsContainer = document.getElementById('chartsContainer');
+        const processingMessage = document.getElementById('processingMessage');
+
+        // Text elements for summaries
+        const weightChangeEl = document.getElementById('weightChange');
+        const fatPercentChangeEl = document.getElementById('fatPercentChange');
+        const leanMassChangeEl = document.getElementById('leanMassChange');
+        const fatMassChangeEl = document.getElementById('fatMassChange');
+
+        let allData = [];
+        let weightFatChartInstance = null;
+        let massChartInstance = null;
+
+        // Map slider values to labels and Moment.js units/amounts
+        const sliderMap = {
+            0: { label: "All Time", duration: null },
+            1: { label: "Last Week", duration: { amount: 1, unit: 'weeks' } },
+            2: { label: "Last Month", duration: { amount: 1, unit: 'months' } },
+            3: { label: "Last 3 Months", duration: { amount: 3, unit: 'months' } },
+            4: { label: "Last 6 Months", duration: { amount: 6, unit: 'months' } },
+            5: { label: "Last 9 Months", duration: { amount: 9, unit: 'months' } },
+            6: { label: "Last Year", duration: { amount: 1, unit: 'years' } },
+            7: { label: "Last 2 Years", duration: { amount: 2, unit: 'years' } },
+            8: { label: "Last 3 Years", duration: { amount: 3, unit: 'years' } },
+            9: { label: "Last 5 Years", duration: { amount: 5, unit: 'years' } }
+        };
+
+        // --- Event Listeners ---
+
+        csvFileInput.addEventListener('change', handleFileSelect);
+        // Use 'input' for immediate feedback as the slider moves
+        timeFrameSlider.addEventListener('input', handleSliderChange);
+        // Use 'change' to trigger update only when the user releases the slider (optional, 'input' is often preferred)
+        // timeFrameSlider.addEventListener('change', updateDisplay);
+
+
+        // --- Functions ---
+
+        function handleSliderChange() {
+            const sliderValue = timeFrameSlider.value;
+            sliderValueDisplay.textContent = sliderMap[sliderValue].label;
+            // Update charts immediately as the slider moves
+            updateDisplay();
+        }
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) {
+                processingMessage.textContent = 'No file selected.';
+                return;
+            }
+            processingMessage.textContent = 'Processing CSV...';
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                dynamicTyping: false, // Parse as strings first for robust date/number handling
+                complete: processData,
+                error: (error) => {
+                    console.error('PapaParse Error:', error);
+                    processingMessage.textContent = `Error parsing CSV: ${error.message}`;
+                     clearDataAndCharts();
+                }
+            });
+        }
+
+        function processData(results) {
+            if (results.errors.length > 0) {
+                 console.error('CSV Parsing Errors:', results.errors);
+                 processingMessage.textContent = `Found ${results.errors.length} errors during parsing. Check console.`;
+            }
+            if (!results.data || results.data.length === 0) {
+                 processingMessage.textContent = 'CSV appears to be empty or invalid.';
+                 clearDataAndCharts();
+                 return;
+            }
+
+            clearDataAndCharts(); // Clear previous state
+
+            try {
+                allData = results.data
+                    .map(row => {
+                        const date = moment(row.date, "D MMM YYYY, HH:mm", true);
+                        const weight = parseFloat(row.weight_kg);
+                        const fatPercent = parseFloat(row.fat_percent);
+
+                        if (!date.isValid() || isNaN(weight) || isNaN(fatPercent) || weight <= 0 || fatPercent < 0) {
+                            console.warn('Skipping invalid row:', row);
+                            return null;
+                        }
+
+                        const leanMass = weight * (1 - fatPercent / 100);
+                        const fatMass = weight * (fatPercent / 100);
+
+                        return {
+                            date: date,
+                            weight_kg: weight,
+                            fat_percent: fatPercent,
+                            lean_mass_kg: leanMass,
+                            fat_mass_kg: fatMass
+                        };
+                    })
+                    .filter(row => row !== null)
+                    .sort((a, b) => a.date.valueOf() - b.date.valueOf());
+
+                if (allData.length === 0) {
+                     processingMessage.textContent = 'No valid data found in the CSV after processing.';
+                     clearDataAndCharts();
+                } else {
+                    processingMessage.textContent = `Successfully processed ${allData.length} data points.`;
+                    timeFrameControls.style.display = 'flex'; // Show slider controls
+                    chartsContainer.style.display = 'block'; // Show charts container
+                    timeFrameSlider.value = 0; // Reset slider to 'All Time'
+                    sliderValueDisplay.textContent = sliderMap[0].label; // Update display
+                    updateDisplay(); // Initial display
+                }
+            } catch (error) {
+                console.error("Error processing data:", error);
+                processingMessage.textContent = `Error processing data: ${error.message}`;
+                clearDataAndCharts();
+            }
+        }
+
+        function clearDataAndCharts() {
+            allData = [];
+            timeFrameControls.style.display = 'none'; // Hide slider
+            chartsContainer.style.display = 'none';
+            if (weightFatChartInstance) {
+                weightFatChartInstance.destroy();
+                weightFatChartInstance = null;
+            }
+            if (massChartInstance) {
+                massChartInstance.destroy();
+                massChartInstance = null;
+            }
+            weightChangeEl.textContent = 'N/A';
+            fatPercentChangeEl.textContent = 'N/A';
+            leanMassChangeEl.textContent = 'N/A';
+            fatMassChangeEl.textContent = 'N/A';
+            formatChangeText(weightChangeEl, 0, '');
+            formatChangeText(fatPercentChangeEl, 0, '');
+            formatChangeText(leanMassChangeEl, 0, '');
+            formatChangeText(fatMassChangeEl, 0, '');
+            processingMessage.textContent = '';
+        }
+
+
+        function filterDataByTimeFrame(data, sliderValue) {
+            const config = sliderMap[sliderValue];
+
+            if (!config || !config.duration || data.length === 0) {
+                return data; // Return all data if "All Time" or no data exists
+            }
+
+            const now = moment();
+            const { amount, unit } = config.duration;
+            const startDate = now.clone().subtract(amount, unit);
+
+            // Filter data points that are on or after the start date
+            return data.filter(d => d.date.isSameOrAfter(startDate, 'day'));
+        }
+
+         function updateDisplay() {
+            if (allData.length === 0) return;
+
+            const selectedSliderValue = timeFrameSlider.value;
+            const filteredData = filterDataByTimeFrame(allData, selectedSliderValue);
+
+            updateCharts(filteredData);
+            updateSummaryText(filteredData);
+        }
+
+
+function updateCharts(data) {
+    const labels = data.map(d => d.date); // Chart.js will use Moment objects
+    const weightData = data.map(d => d.weight_kg);
+    const fatPercentData = data.map(d => d.fat_percent);
+    const leanMassData = data.map(d => d.lean_mass_kg);
+    const fatMassData = data.map(d => d.fat_mass_kg);
+
+    // Destroy existing charts before creating new ones
+    if (weightFatChartInstance) weightFatChartInstance.destroy();
+    if (massChartInstance) massChartInstance.destroy();
+
+    if (data.length === 0) {
+        // Optionally display a message on the canvas if no data for timeframe
+        console.log("No data for selected timeframe.");
+         // Clear the canvas contexts if desired
+         weightFatCanvas.clearRect(0, 0, weightFatCanvas.canvas.width, weightFatCanvas.canvas.height);
+         massCanvas.clearRect(0, 0, massCanvas.canvas.width, massCanvas.canvas.height);
+        return; // Stop chart creation if no data
+    }
+
+    // Chart 1: Weight & Fat Percentage (Remains the same as before)
+    weightFatChartInstance = new Chart(weightFatCanvas, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Weight (kg)',
+                    data: weightData,
+                    borderColor: 'rgb(75, 192, 192)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    yAxisID: 'y',
+                    tension: 0.1
+                },
+                {
+                    label: 'Body Fat (%)',
+                    data: fatPercentData,
+                    borderColor: 'rgb(255, 99, 132)',
+                    backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                    yAxisID: 'y1',
+                    tension: 0.1
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+               mode: 'index',
+               intersect: false,
+            },
+            scales: {
+                x: {
+                    type: 'time',
+                    time: {
+                        unit: determineTimeUnit(labels),
+                        tooltipFormat: 'll', // Display format for tooltip e.g., "Sep 4, 1986"
+                        displayFormats: { // Adjust display formats based on time range
+                             day: 'MMM D',
+                             week: 'MMM D YYYY',
+                             month: 'MMM YYYY',
+                             quarter: '[Q]Q YYYY',
+                             year: 'YYYY'
+                         }
+                    },
+                    title: {
+                        display: true,
+                        text: 'Date'
+                    }
+                },
+                y: { // Left Y Axis (Weight)
+                    type: 'linear',
+                    display: true,
+                    position: 'left',
+                    title: {
+                        display: true,
+                        text: 'Weight (kg)'
+                    }
+                },
+                y1: { // Right Y Axis (Fat %)
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    title: {
+                        display: true,
+                        text: 'Body Fat (%)'
+                    },
+                    grid: {
+                        drawOnChartArea: false,
+                    },
+                }
+            },
+            plugins: {
+                tooltip: {
+                     callbacks: {
+                         label: function(context) {
+                             let label = context.dataset.label || '';
+                             if (label) {
+                                 label += ': ';
+                             }
+                             if (context.parsed.y !== null) {
+                                if (context.dataset.yAxisID === 'y1') {
+                                    label += context.parsed.y.toFixed(1) + ' %'; // Fat %
+                                } else {
+                                    label += context.parsed.y.toFixed(1) + ' kg'; // Weight
+                                }
+                             }
+                             return label;
+                         }
+                     }
+                }
+            }
+        }
+    });
+
+    // Chart 2: Lean Mass & Fat Mass -- WITH DUAL AXIS MODIFICATION
+    massChartInstance = new Chart(massCanvas, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Lean Mass (kg)',
+                    data: leanMassData,
+                    borderColor: 'rgb(54, 162, 235)',
+                    backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                    yAxisID: 'y', // Assign Lean Mass to the primary (left) axis
+                    tension: 0.1
+                },
+                {
+                    label: 'Fat Mass (kg)',
+                    data: fatMassData,
+                    borderColor: 'rgb(255, 159, 64)',
+                    backgroundColor: 'rgba(255, 159, 64, 0.2)',
+                    yAxisID: 'y1', // Assign Fat Mass to the secondary (right) axis
+                    tension: 0.1
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+             interaction: {
+               mode: 'index',
+               intersect: false,
+            },
+            scales: {
+                 x: {
+                    type: 'time',
+                     time: {
+                        unit: determineTimeUnit(labels),
+                        tooltipFormat: 'll',
+                         displayFormats: {
+                             day: 'MMM D',
+                             week: 'MMM D YYYY',
+                             month: 'MMM YYYY',
+                             quarter: '[Q]Q YYYY',
+                             year: 'YYYY'
+                         }
+                    },
+                    title: {
+                        display: true,
+                        text: 'Date'
+                    }
+                },
+                y: { // Define the primary (left) Y Axis for Lean Mass
+                    type: 'linear',
+                    display: true,
+                    position: 'left',
+                    title: {
+                        display: true,
+                        text: 'Lean Mass (kg)'
+                    }
+                    // Optional: Adjust min/max suggestions if needed
+                    // suggestedMin: Math.min(...leanMassData) * 0.95,
+                    // suggestedMax: Math.max(...leanMassData) * 1.05
+                },
+                y1: { // Define the secondary (right) Y Axis for Fat Mass
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    title: {
+                        display: true,
+                        text: 'Fat Mass (kg)'
+                    },
+                    // Ensure grid lines from this axis don't clutter the chart
+                    grid: {
+                        drawOnChartArea: false,
+                    },
+                    // Optional: Adjust min/max suggestions if needed
+                    // suggestedMin: Math.min(...fatMassData) * 0.9,
+                    // suggestedMax: Math.max(...fatMassData) * 1.1
+                }
+            },
+             plugins: {
+                tooltip: {
+                     callbacks: {
+                         label: function(context) {
+                             let label = context.dataset.label || '';
+                             if (label) {
+                                 label += ': ';
+                             }
+                             if (context.parsed.y !== null) {
+                                 // Both units are kg, so simple formatting works
+                                 label += context.parsed.y.toFixed(2) + ' kg';
+                             }
+                             return label;
+                         }
+                     }
+                }
+            }
+        }
+    });
+}
+
+
+        function determineTimeUnit(labels) {
+            if (!labels || labels.length < 2) return 'day';
+
+            const firstDate = moment(labels[0]);
+            const lastDate = moment(labels[labels.length - 1]);
+            const durationDays = lastDate.diff(firstDate, 'days');
+
+            if (durationDays > 4 * 365) return 'year';    // ~4+ years -> Year ticks
+            if (durationDays > 2 * 365) return 'quarter'; // ~2-4 years -> Quarter ticks
+            if (durationDays > 180) return 'month';       // ~6mo - 2yr -> Month ticks
+            if (durationDays > 30) return 'week';         // ~1mo - 6mo -> Week ticks
+            return 'day';                                // < 1 month -> Day ticks
+        }
+
+
+        function updateSummaryText(data) {
+            if (data.length < 2) {
+                weightChangeEl.textContent = 'N/A';
+                fatPercentChangeEl.textContent = 'N/A';
+                leanMassChangeEl.textContent = 'N/A';
+                fatMassChangeEl.textContent = 'N/A';
+                formatChangeText(weightChangeEl, 0, '');
+                formatChangeText(fatPercentChangeEl, 0, '');
+                formatChangeText(leanMassChangeEl, 0, '');
+                formatChangeText(fatMassChangeEl, 0, '');
+                return;
+            }
+
+            const first = data[0];
+            const last = data[data.length - 1];
+
+            const weightChange = last.weight_kg - first.weight_kg;
+            const fatPercentChange = last.fat_percent - first.fat_percent;
+            const leanMassChange = last.lean_mass_kg - first.lean_mass_kg;
+            const fatMassChange = last.fat_mass_kg - first.fat_mass_kg;
+
+            formatChangeText(weightChangeEl, weightChange, 'kg');
+            formatChangeText(fatPercentChangeEl, fatPercentChange, '%');
+            formatChangeText(leanMassChangeEl, leanMassChange, 'kg');
+            formatChangeText(fatMassChangeEl, fatMassChange, 'kg');
+        }
+
+        function formatChangeText(element, value, unit) {
+            element.classList.remove('positive', 'negative', 'no-change');
+            let sign = '';
+            if (value > 0.001) {
+                 sign = '+';
+                 element.classList.add('positive');
+            } else if (value < -0.001) {
+                 element.classList.add('negative');
+            } else {
+                 element.classList.add('no-change');
+            }
+             const decimals = (unit === '%') ? 1 : 2;
+             element.textContent = `${sign}${value.toFixed(decimals)} ${unit}`;
+         }
+
+    </script>
+
+</body>
+</html>
